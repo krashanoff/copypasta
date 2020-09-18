@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"time"
@@ -28,7 +29,7 @@ func child(f *os.File, bufSize int64, c chan<- fsop, start int64, end int64) {
 
 	// if no end, then just keep reading.
 	if end == -1 {
-		f.Seek(start, os.SEEK_SET)
+		f.Seek(start, io.SeekStart)
 		r.loc = start
 		for {
 			rc, err := f.Read(r.msg)
@@ -77,6 +78,13 @@ func main() {
 	outFile, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE, inFileStat.Mode())
 	if err != nil {
 		log.Fatalf("Failed to open or create output file: %v", err)
+	}
+
+	// try to truncate.
+	if err := outFile.Truncate(inFileStat.Size()); err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Failed to truncate output file")
 	}
 
 	done := make(chan bool, 1)
