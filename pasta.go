@@ -25,9 +25,14 @@ func main() {
 	verbose := flag.Bool("v", false, "verbose output")
 	in := flag.String("i", os.Stdin.Name(), "your input `file`, pipe, block device, character device...")
 	out := flag.String("o", os.Stdout.Name(), "your output `file`, pipe, block device, dotmatrix printer...")
-	bs := flag.String("bs", "512B", "define the `block size` used for read and write buffers (e.g. 256, 1M, 1G, ...)")
-	// workers := flag.Uint("w", 2, "number of `worker` processes")
+	bs := flag.String("bs", "1M", "define the `block size` used for read and write buffers (e.g. 256, 1M, 1G, ...)")
+	width := flag.Uint("q", 10, "define the channel `width`")
 	flag.Parse()
+
+	log.SetLevel(log.PanicLevel)
+	if *verbose {
+		log.SetLevel(log.DebugLevel)
+	}
 
 	// buffer size parsing
 	bufSize, err := strconv.ParseInt((*bs)[:len(*bs)-1], 10, 64)
@@ -47,11 +52,6 @@ func main() {
 		log.Fatalf("Invalid block size unit: %v", (*bs)[len(*bs)-1])
 	}
 	log.Infof("Buffer size is (%d)", bufSize)
-
-	log.SetLevel(log.PanicLevel)
-	if *verbose {
-		log.SetLevel(log.DebugLevel)
-	}
 
 	inFile, err := os.Open(*in)
 	if err != nil {
@@ -79,9 +79,16 @@ func main() {
 	abort := make(chan os.Signal, 3) // early termination
 	signal.Notify(abort, os.Interrupt, os.Kill)
 
+	// graceful early death
+	go func() {
+		<-abort
+		log.Infoln("Shutting down...")
+		os.Exit(0)
+	}()
+
 	// the thing that keeps these leaky pipes together.
-	reads := make(chan fsop)
-	writes := make(chan fsop)
+	reads := make(chan fsop, *width)
+	writes := make(chan fsop, *width)
 
 	// read from master, fwd writes
 	go func() {
@@ -99,10 +106,9 @@ func main() {
 		log.Infoln("Closed writes channel.")
 	}()
 
-	// spawn writing process
+	// writing process
 	go func() {
 		for op := range writes {
-			// watch for incomplete writes
 			fields := log.WithFields(log.Fields{
 				"location": op.loc,
 				"size":     op.size,
@@ -118,7 +124,7 @@ func main() {
 		log.Infoln("Sent termination signal.")
 	}()
 
-	// master process
+	// master process populates the queue
 	go func() {
 		log.Infoln("Spawned master process.")
 
@@ -132,13 +138,6 @@ func main() {
 
 		close(reads)
 		log.Infoln("Closed reads channel.")
-	}()
-
-	// graceful early death
-	go func() {
-		<-abort
-		log.Infoln("Shutting down...")
-		os.Exit(0)
 	}()
 
 	// catharsis
